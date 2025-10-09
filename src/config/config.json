@@ -1,0 +1,49 @@
+{
+  "pools": [
+    {
+      "name": "us-east",
+      "servers": [
+        {"ip": "192.168.1.10", "port": 53, "weight": 3},
+        {"ip": "192.168.1.11", "port": 53, "weight": 3},
+        {"ip": "192.168.1.12", "port": 53, "weight": 2}
+      ],
+      "health_endpoint": "192.168.1.10:8080/health",
+      "geo_region": "north-america",
+      "check_interval_sec": 10
+    },
+    {
+      "name": "eu-west", 
+      "servers": [
+        {"ip": "192.168.2.10", "port": 53, "weight": 2},
+        {"ip": "192.168.2.11", "port": 53, "weight": 2}
+      ],
+      "health_endpoint": "192.168.2.10:8080/health",
+      "geo_region": "europe",
+      "check_interval_sec": 10
+    },
+    {
+      "name": "asia-sg",
+      "servers": [
+        {"ip": "192.168.3.10", "port": 53, "weight": 1}
+      ],
+      "health_endpoint": "192.168.3.10:8080/health", 
+      "geo_region": "asia",
+      "check_interval_sec": 10
+    },
+    {
+      "name": "down-pool",
+      "servers": [
+        {"ip": "192.168.99.99", "port": 53, "weight": 1},
+        {"ip": "192.168.99.98", "port": 53, "weight": 1}
+      ],
+      "health_endpoint": "192.168.99.99:8080/health",
+      "geo_region": "test",
+      "check_interval_sec": 10
+    }
+  ],
+  "global_settings": {
+    "health_check_timeout_ms": 2000,
+    "max_failures_before_unhealthy": 3,
+    "health_check_method": "http_endpoint"
+  }
+}
