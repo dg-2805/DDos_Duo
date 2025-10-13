@@ -1,0 +1,3 @@
+trial.com A
+example.com A
+test.com A

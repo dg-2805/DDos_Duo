@@ -1,0 +1,32 @@
+{
+  "algorithm": "round_robin",
+  "health_check_interval": 5000,
+  "max_retries": 3,
+  "timeout_ms": 2000,
+  "backends": [
+    {
+      "ip": "127.0.0.1",
+      "port": 5353,
+      "weight": 1,
+      "region": "local"
+    },
+    {
+      "ip": "127.0.0.1",
+      "port": 5354,
+      "weight": 2,
+      "region": "local"
+    },
+    {
+      "ip": "8.8.8.8",
+      "port": 53,
+      "weight": 1,
+      "region": "google"
+    },
+    {
+      "ip": "1.1.1.1",
+      "port": 53,
+      "weight": 1,
+      "region": "cloudflare"
+    }
+  ]
+}
