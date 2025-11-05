@@ -1,0 +1,36 @@
+# DNS Load Balancer Configuration
+
+global:
+  listen_address: 0.0.0.0
+  listen_port: 5353
+  num_workers: 0
+  health_check_interval_ms: 2000
+  health_check_timeout_ms: 1000
+  health_check_query_name: health.check.
+  enable_rrl: false
+  rrl_max_per_second: 10000000
+  rrl_window_seconds: 1
+  socket_rcvbuf_size: 16777216
+  socket_sndbuf_size: 16777216
+  metrics_port: 8080
+  enable_metrics: true
+
+pool:
+  name: default
+  lb_algorithm: round_robin
+
+backend:
+  ip: 127.0.0.1
+  port: 5354
+  weight: 1
+
+backend:
+  ip: 127.0.0.1
+  port: 5355
+  weight: 1
+
+backend:
+  ip: 127.0.0.1
+  port: 5356
+  weight: 1
+

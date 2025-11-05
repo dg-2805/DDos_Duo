@@ -1,3 +1,6 @@
-trial.com A
-example.com A
-test.com A
+www.example.com A
+www.google.com A
+www.github.com A
+www.cloudflare.com A
+www.amazon.com A
+
