@@ -14,6 +14,8 @@
 #include <algorithm>
 #include <string_view>
 #include <thread>
+#include <sstream>
+#include <vector>
 
 Worker::Worker(const Config& config, int worker_id, SharedHealthState* shared_health,
                SharedMetrics* shared_metrics)
@@ -36,6 +38,8 @@ Worker::Worker(const Config& config, int worker_id, SharedHealthState* shared_he
     for (size_t i = 0; i < PENDING_REQUESTS_SIZE; i++) {
         pending_requests_[i].valid = false;
         pending_requests_[i].tx_id = 0;
+        pending_requests_[i].backend_index = 0;
+        pending_requests_[i].request_time_us = 0;
     }
     
     // Initialize backend cache
@@ -410,8 +414,9 @@ void Worker::handle_backend_response(const uint8_t* buffer, size_t len) {
     size_t index = backend_tx_id % PENDING_REQUESTS_SIZE;
     PendingRequestSlot* slot = &pending_requests_[index];
     
-    // OPTIMIZED: Pre-compute timeout check once outside loop (if needed)
-    // Only check timeout if we suspect it might be expired (avoid expensive clock calls)
+    // Get current time for latency calculation
+    uint64_t response_time_us = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
     
     // Linear probing for collisions (increased to 16 probes for high QPS)
     for (int probe = 0; probe < 16; probe++) {
@@ -422,7 +427,46 @@ void Worker::handle_backend_response(const uint8_t* buffer, size_t len) {
             // Only check timeout if entry seems old (timestamp > 4000ms old)
             // Most responses arrive within 100ms, so skip check for fast path
             ClientAddress client_info = slot->client;
+            size_t backend_idx = slot->backend_index;
+            uint64_t request_time_us = slot->request_time_us;
             slot->valid = false;  // Free the slot immediately
+            
+            // Calculate and update latency (EWMA)
+            if (request_time_us > 0 && backend_idx < shared_health_->backend_count.load(std::memory_order_acquire)) {
+                uint64_t rtt_us = response_time_us - request_time_us;
+                
+                // Apply simulated latency if configured
+                if (!config_.simulate_latency_us.empty()) {
+                    // Parse comma-separated latency values
+                    static thread_local std::vector<uint64_t> simulated_latencies;
+                    static thread_local bool latencies_parsed = false;
+                    
+                    if (!latencies_parsed) {
+                        std::istringstream iss(config_.simulate_latency_us);
+                        std::string token;
+                        simulated_latencies.clear();
+                        while (std::getline(iss, token, ',')) {
+                            try {
+                                simulated_latencies.push_back(std::stoull(token));
+                            } catch (...) {
+                                // Invalid value, skip
+                            }
+                        }
+                        latencies_parsed = true;
+                    }
+                    
+                    if (backend_idx < simulated_latencies.size()) {
+                        rtt_us = simulated_latencies[backend_idx];
+                    }
+                }
+                
+                // Update EWMA latency (alpha = 1/8: new = (7*old + sample) / 8)
+                auto& backend = shared_health_->backends[backend_idx];
+                uint64_t old_latency = backend.ewma_latency_us.load(std::memory_order_relaxed);
+                uint64_t new_latency = (old_latency * 7 + rtt_us) / 8;
+                backend.ewma_latency_us.store(new_latency, std::memory_order_relaxed);
+                backend.responses_received.fetch_add(1, std::memory_order_relaxed);
+            }
             
             // OPTIMIZED: Write directly into batched response buffer to avoid extra copy
             if (pending_responses_ >= BATCH_SIZE) {
@@ -588,25 +632,24 @@ bool Worker::forward_to_backend(uint8_t* buffer, size_t len, uint16_t original_t
         new_tx_id = next_backend_tx_id_.fetch_add(1, std::memory_order_relaxed);
     }
     
-    // OPTIMIZED: Use cheaper timestamp (only calculate when needed for storage)
-    // Calculate timestamp only once after we find where to store
-    uint64_t now_ms = 0;  // Will calculate lazily if needed
+    // Get request time in microseconds for latency tracking
+    uint64_t request_time_us = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    uint64_t now_ms = request_time_us / 1000;
     
     // OPTIMIZED: Store in array with better collision handling
     // Use Robin Hood hashing: keep probing until we find empty slot OR expired slot
     size_t index = new_tx_id % PENDING_REQUESTS_SIZE;
     PendingRequestSlot* slot = &pending_requests_[index];
-
+    
     bool stored = false;
     for (int probe = 0; probe < 16; probe++) {
         if (!slot->valid) {
-            // Found empty slot - calculate timestamp only now
-            if (now_ms == 0) {
-                now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::steady_clock::now().time_since_epoch()).count();
-            }
+            // Found empty slot
             slot->tx_id = new_tx_id;
             slot->client = ClientAddress(client_ip, client_port, original_tx_id, now_ms);
+            slot->backend_index = backend_idx;
+            slot->request_time_us = request_time_us;
             slot->valid = true;
             stored = true;
             break;
@@ -617,14 +660,12 @@ bool Worker::forward_to_backend(uint8_t* buffer, size_t len, uint16_t original_t
         // Most entries are fresh, so we can skip this check for fast path
         if (slot->client.timestamp_ms != 0) {
             // Entry exists - check if expired (lazy timestamp calc)
-            if (now_ms == 0) {
-                now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::steady_clock::now().time_since_epoch()).count();
-            }
             if (now_ms - slot->client.timestamp_ms > 5000) {
                 // Overwrite expired entry
                 slot->tx_id = new_tx_id;
                 slot->client = ClientAddress(client_ip, client_port, original_tx_id, now_ms);
+                slot->backend_index = backend_idx;
+                slot->request_time_us = request_time_us;
                 slot->valid = true;
                 stored = true;
                 break;
@@ -638,12 +679,10 @@ bool Worker::forward_to_backend(uint8_t* buffer, size_t len, uint16_t original_t
     
     // If still not stored, force overwrite current slot (emergency fallback)
     if (!stored) {
-        if (now_ms == 0) {
-            now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now().time_since_epoch()).count();
-        }
         slot->tx_id = new_tx_id;
         slot->client = ClientAddress(client_ip, client_port, original_tx_id, now_ms);
+        slot->backend_index = backend_idx;
+        slot->request_time_us = request_time_us;
         slot->valid = true;
     }
     
@@ -710,13 +749,50 @@ size_t Worker::select_backend_direct(uint32_t client_ip) {
         return 0;
     }
     
-    // Choose algorithm from config (pool 0)
-    const std::string* algo_ptr = nullptr;
-    if (!config_.pools.empty()) algo_ptr = &config_.pools[0].lb_algorithm;
-    const std::string algo = algo_ptr ? *algo_ptr : std::string("round_robin");
     size_t n = backend_cache_.healthy_count;
     
-    if (algo == "p2c" || algo == "power_of_two") {
+    // Automatic algorithm selection: check if latency data is available
+    // If latency data exists (responses received > threshold), use latency-based
+    // Otherwise, use configured algorithm or default
+    bool use_latency_based = false;
+    if (n > 0) {
+        // Check if we have meaningful latency data (at least 10 responses per backend)
+        size_t backends_with_data = 0;
+        for (size_t i = 0; i < n; i++) {
+            size_t idx = backend_cache_.healthy_indices[i];
+            if (shared_health_->backends[idx].responses_received.load(std::memory_order_relaxed) >= 10) {
+                backends_with_data++;
+            }
+        }
+        // Use latency-based if at least half of backends have latency data
+        use_latency_based = (backends_with_data * 2 >= n);
+    }
+    
+    // Choose algorithm from config (pool 0) or auto-select
+    const std::string* algo_ptr = nullptr;
+    if (!config_.pools.empty()) algo_ptr = &config_.pools[0].lb_algorithm;
+    std::string algo = algo_ptr ? *algo_ptr : std::string("auto");
+    
+    // Auto-select algorithm if configured or if latency data is available
+    if (algo == "auto" || (algo == "round_robin" && use_latency_based)) {
+        algo = use_latency_based ? "latency" : "round_robin";
+    }
+    
+    if (algo == "latency" || algo == "latency_based") {
+        // Latency-based: select backend with lowest EWMA latency
+        size_t best_idx = backend_cache_.healthy_indices[0];
+        uint64_t best_latency = shared_health_->backends[best_idx].ewma_latency_us.load(std::memory_order_relaxed);
+        
+        for (size_t i = 1; i < n; i++) {
+            size_t idx = backend_cache_.healthy_indices[i];
+            uint64_t latency = shared_health_->backends[idx].ewma_latency_us.load(std::memory_order_relaxed);
+            if (latency < best_latency) {
+                best_latency = latency;
+                best_idx = idx;
+            }
+        }
+        return best_idx;
+    } else if (algo == "p2c" || algo == "power_of_two") {
         // Very low overhead RNG via LCG on pool_rr_counter_
         uint64_t seed = (pool_rr_counter_ += 0x9E3779B97F4A7C15ULL);
         size_t a = (size_t)((seed ^ (seed >> 18)) % n);
@@ -726,9 +802,17 @@ size_t Worker::select_backend_direct(uint32_t client_ip) {
         size_t ib = backend_cache_.healthy_indices[b];
         const auto& ba = shared_health_->backends[ia];
         const auto& bb = shared_health_->backends[ib];
-        uint64_t pa = ba.requests_sent.load(std::memory_order_relaxed) - ba.responses_received.load(std::memory_order_relaxed);
-        uint64_t pb = bb.requests_sent.load(std::memory_order_relaxed) - bb.responses_received.load(std::memory_order_relaxed);
-        return (pa <= pb) ? ia : ib;
+        
+        // Use latency if available, otherwise use pending requests
+        if (use_latency_based || config_.use_latency_p2c) {
+            uint64_t la = ba.ewma_latency_us.load(std::memory_order_relaxed);
+            uint64_t lb = bb.ewma_latency_us.load(std::memory_order_relaxed);
+            return (la <= lb) ? ia : ib;
+        } else {
+            uint64_t pa = ba.requests_sent.load(std::memory_order_relaxed) - ba.responses_received.load(std::memory_order_relaxed);
+            uint64_t pb = bb.requests_sent.load(std::memory_order_relaxed) - bb.responses_received.load(std::memory_order_relaxed);
+            return (pa <= pb) ? ia : ib;
+        }
     } else if (algo == "ip_hash") {
         // Fast multiplicative hash modulo healthy count
         uint32_t h = client_ip * 2654435761u;

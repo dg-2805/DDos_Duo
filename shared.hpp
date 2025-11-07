@@ -23,6 +23,8 @@ struct BackendHealth {
     std::atomic<uint64_t> requests_sent;
     std::atomic<uint64_t> responses_received;
     std::atomic<uint64_t> errors;
+    // EWMA latency in microseconds (smoothed per-backend RTT estimate)
+    std::atomic<uint64_t> ewma_latency_us;
     
     // OPTIMIZED: Cached binary IP address to avoid inet_pton on hot path
     uint32_t ip_addr_binary;  // Network byte order
@@ -30,7 +32,7 @@ struct BackendHealth {
     
     BackendHealth() : port(53), is_healthy(false), 
                      requests_sent(0), responses_received(0), errors(0),
-                     ip_addr_binary(0) {
+                     ewma_latency_us(5000), ip_addr_binary(0) {
         ip[0] = '\0';
         memset(&cached_addr, 0, sizeof(cached_addr));
     }

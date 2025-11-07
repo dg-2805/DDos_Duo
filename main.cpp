@@ -207,6 +207,16 @@ void metrics_server_thread(uint16_t port, SharedMetrics* metrics, SharedHealthSt
                 response << "dns_loadbalancer_backend_errors{backend=\"" << i 
                          << "\",ip=\"" << backend.ip << "\"} " << errors << "\n";
             }
+            response << "\n";
+            
+            response << "# HELP dns_loadbalancer_backend_latency_us Backend EWMA latency in microseconds\n";
+            response << "# TYPE dns_loadbalancer_backend_latency_us gauge\n";
+            for (size_t i = 0; i < backend_count && i < MAX_BACKENDS; i++) {
+                const auto& backend = health->backends[i];
+                uint64_t latency = backend.ewma_latency_us.load();
+                response << "dns_loadbalancer_backend_latency_us{backend=\"" << i 
+                         << "\",ip=\"" << backend.ip << "\"} " << latency << "\n";
+            }
         }
         
         std::string response_str = response.str();
@@ -222,8 +232,16 @@ int main(int argc, char* argv[]) {
     
     // Parse command line arguments
     std::string config_file = "config.txt";
-    if (argc > 1) {
-        config_file = argv[1];
+    std::string simulate_latency = "";
+    
+    for (int i = 1; i < argc; i++) {
+        std::string arg = argv[i];
+        if (arg == "--simulate-latency" && i + 1 < argc) {
+            simulate_latency = argv[++i];
+        } else if (arg.find("--") != 0 && config_file == "config.txt") {
+            // First non-option argument is config file
+            config_file = arg;
+        }
     }
     
     // Load configuration
@@ -237,6 +255,12 @@ int main(int argc, char* argv[]) {
         config.pools[0].backends[0].ip = "8.8.8.8";
         config.pools[0].backends[0].port = 53;
         config.pools[0].backends[0].weight = 1;
+    }
+    
+    // Apply latency simulation if provided
+    if (!simulate_latency.empty()) {
+        config.simulate_latency_us = simulate_latency;
+        std::cout << "Latency simulation enabled: " << simulate_latency << " microseconds" << std::endl;
     }
     
     print_config(config);

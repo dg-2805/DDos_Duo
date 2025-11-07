@@ -53,6 +53,13 @@ struct Config {
     uint32_t cache_ttl_ms;     // TTL for cached responses
     uint32_t cache_size;       // Number of cache entries (power of two recommended)
     
+    // Latency-aware P2C flag: when true, power-of-two selection uses EWMA latency
+    bool use_latency_p2c;
+    
+    // Latency simulation: comma-separated list of latencies in microseconds per backend
+    // Example: "1000,2000,3000" for 3 backends with 1ms, 2ms, 3ms simulated latency
+    std::string simulate_latency_us;
+    
     Config() : listen_address("0.0.0.0"), listen_port(53),
                num_workers(0), health_check_interval_ms(2000),
                health_check_timeout_ms(1000), health_check_query_name("health.check."),
@@ -60,7 +67,8 @@ struct Config {
                rrl_window_seconds(1), socket_rcvbuf_size(1024 * 1024),
                socket_sndbuf_size(1024 * 1024), metrics_port(8080),
                enable_metrics(true),
-               enable_cache(true), cache_ttl_ms(2000), cache_size(65536) {}
+               enable_cache(true), cache_ttl_ms(2000), cache_size(65536),
+               use_latency_p2c(false), simulate_latency_us("") {}
 };
 
 // Configuration loading functions

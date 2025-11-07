@@ -36,8 +36,10 @@ private:
         uint16_t tx_id;           // Stored TX ID (0 = empty)
         ClientAddress client;
         bool valid;
+        size_t backend_index;     // Which backend this request was sent to (for latency tracking)
+        uint64_t request_time_us; // Request timestamp in microseconds (for latency calculation)
         
-        PendingRequestSlot() : tx_id(0), valid(false) {}
+        PendingRequestSlot() : tx_id(0), valid(false), backend_index(0), request_time_us(0) {}
     };
     PendingRequestSlot* pending_requests_;  // Heap-allocated array
     std::atomic<uint16_t> next_backend_tx_id_;
