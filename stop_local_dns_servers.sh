@@ -18,3 +18,16 @@ fi
 # Also kill any remaining python DNS servers
 pkill -f "local_dns_server[123].py" 2>/dev/null && echo "Cleaned up any remaining DNS server processes"
 
+# Stop BIND server if running
+if [ -f /tmp/bind_server.pid ]; then
+    BIND_PID=$(cat /tmp/bind_server.pid)
+    if kill -0 $BIND_PID 2>/dev/null; then
+        kill $BIND_PID
+        echo "Stopped BIND server with PID $BIND_PID"
+    fi
+    rm -f /tmp/bind_server.pid
+fi
+
+# Also try to stop any named processes
+pkill -f "named.*named.conf.bind" 2>/dev/null && echo "Cleaned up any remaining BIND processes"
+

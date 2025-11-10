@@ -1,0 +1,60 @@
+// BIND configuration for high-performance DNS forwarding
+// Optimized for maximum QPS
+
+options {
+    // Listen on localhost port 5354
+    listen-on port 5354 { 127.0.0.1; };
+    listen-on-v6 { none; };
+    
+    // Directory for BIND runtime files
+    directory "/tmp/bind";
+    
+    // Enable recursion for forwarding
+    recursion yes;
+    
+    // Forward all queries to Google DNS
+    forwarders {
+        8.8.8.8;
+    };
+    forward only;
+    
+    // Performance optimizations for high QPS
+    max-cache-size 100m;
+    max-cache-ttl 3600;
+    
+    // Increase socket buffer sizes for high throughput
+    edns-udp-size 4096;
+    
+    // Disable unnecessary features for performance
+    dnssec-enable no;
+    dnssec-validation no;
+    
+    // Query logging disabled for performance (can enable if needed)
+    querylog no;
+    
+    // Statistics channel disabled
+    statistics-channels { };
+    
+    // Thread model for high concurrency
+    minimal-responses yes;
+    
+    // Optimize for forwarding
+    max-ncache-ttl 10800;
+    max-recursion-depth 3;
+    max-recursion-queries 10;
+    
+    // Disable version and hostname queries for security/performance
+    version none;
+    hostname none;
+    server-id none;
+};
+
+// Root zone hint - use inline format to avoid file dependency
+zone "." IN {
+    type hint;
+    file "/tmp/bind/db.root";
+};
+
+// Create minimal root hints file inline
+// This will be created by the startup script
+
