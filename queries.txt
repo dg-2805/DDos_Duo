@@ -2,5 +2,5 @@ www.example.com A
 www.google.com A
 www.github.com A
 www.cloudflare.com A
-www.amazon.com A
+www.amazon.com AAAA
 

@@ -30,6 +30,12 @@ struct Config {
     int num_workers;  // Number of worker processes (0 = auto-detect from CPU cores)
     std::vector<Pool> pools;
     
+    // XDP settings (optional)
+    bool xdp_enable;           // attach XDP-generic for kernel fastpath LB
+    std::string xdp_iface;     // network interface name
+    std::string xdp_mode;      // "generic" (default) or "driver"
+    std::string xdp_vip;       // VIP IPv4 (defaults to listen_address)
+    
     // Health check settings
     uint32_t health_check_interval_ms;
     uint32_t health_check_timeout_ms;
@@ -61,7 +67,9 @@ struct Config {
     std::string simulate_latency_us;
     
     Config() : listen_address("0.0.0.0"), listen_port(53),
-               num_workers(0), health_check_interval_ms(2000),
+               num_workers(0),
+               xdp_enable(false), xdp_iface(""), xdp_mode("generic"), xdp_vip(""),
+               health_check_interval_ms(2000),
                health_check_timeout_ms(1000), health_check_query_name("health.check."),
                enable_rrl(true), rrl_max_per_second(10),
                rrl_window_seconds(1), socket_rcvbuf_size(1024 * 1024),

@@ -80,6 +80,15 @@ bool load_config_from_file(const std::string& filename, Config& config) {
                 config.listen_address = extract_value(line);
             } else if (line.find("listen_port:") != std::string::npos) {
                 config.listen_port = extract_int(line, 53);
+            } else if (line.find("xdp_enable:") != std::string::npos) {
+                std::string val = extract_value(line);
+                config.xdp_enable = (val == "true" || val == "1");
+            } else if (line.find("xdp_iface:") != std::string::npos) {
+                config.xdp_iface = extract_value(line);
+            } else if (line.find("xdp_mode:") != std::string::npos) {
+                config.xdp_mode = extract_value(line);
+            } else if (line.find("xdp_vip:") != std::string::npos) {
+                config.xdp_vip = extract_value(line);
             } else if (line.find("num_workers:") != std::string::npos) {
                 config.num_workers = extract_int(line, 0);
             } else if (line.find("health_check_interval_ms:") != std::string::npos) {
@@ -162,6 +171,12 @@ void print_config(const Config& config) {
     std::cout << "Listen Address: " << config.listen_address << std::endl;
     std::cout << "Listen Port: " << config.listen_port << std::endl;
     std::cout << "Workers: " << config.num_workers << std::endl;
+    std::cout << "XDP Enabled: " << (config.xdp_enable ? "yes" : "no") << std::endl;
+    if (config.xdp_enable) {
+        std::cout << "XDP Iface: " << config.xdp_iface << " Mode: " << config.xdp_mode
+                  << " VIP: " << (config.xdp_vip.empty() ? config.listen_address : config.xdp_vip)
+                  << std::endl;
+    }
     std::cout << "Health Check Interval: " << config.health_check_interval_ms << "ms" << std::endl;
     std::cout << "RRL Enabled: " << (config.enable_rrl ? "yes" : "no") << std::endl;
     std::cout << "RRL Max Per Second: " << config.rrl_max_per_second << std::endl;
