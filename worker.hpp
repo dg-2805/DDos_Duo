@@ -51,6 +51,9 @@ private:
         size_t healthy_count;
         size_t rr_counter;
         uint64_t last_update_ns;
+        uint32_t healthy_weights[64];
+        uint32_t total_weight;
+        uint64_t wrr_counter;
     };
     BackendCache backend_cache_;
     

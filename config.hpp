@@ -20,7 +20,7 @@ struct Pool {
     std::vector<Backend> backends;
     std::string lb_algorithm;  // "round_robin", "weighted_round_robin", "geoproximity"
     
-    Pool() : lb_algorithm("round_robin") {}
+    Pool() : lb_algorithm("auto") {}
 };
 
 // Main configuration structure

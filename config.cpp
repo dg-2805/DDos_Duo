@@ -18,6 +18,11 @@ static std::string extract_value(const std::string& line) {
     if (colon == std::string::npos) return "";
     std::string value = line.substr(colon + 1);
     trim(value);
+    // Remove trailing comma if present (tolerate YAML-like syntax)
+    if (!value.empty() && value.back() == ',') {
+        value.pop_back();
+        trim(value);
+    }
     // Remove quotes if present
     if (!value.empty() && value[0] == '"') {
         value = value.substr(1);

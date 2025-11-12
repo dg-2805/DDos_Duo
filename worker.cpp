@@ -44,6 +44,8 @@ Worker::Worker(const Config& config, int worker_id, SharedHealthState* shared_he
     
     // Initialize backend cache
     memset(&backend_cache_, 0, sizeof(backend_cache_));
+    backend_cache_.total_weight = 0;
+    backend_cache_.wrr_counter = 0;
     
     // Initialize metrics batch
     memset(&metrics_batch_, 0, sizeof(metrics_batch_));
@@ -728,10 +730,27 @@ size_t Worker::select_backend_direct(uint32_t client_ip) {
         backend_cache_.last_update_ns == 0) {
         
         backend_cache_.healthy_count = 0;
+        backend_cache_.total_weight = 0;
         
         for (size_t i = 0; i < current_backend_count && backend_cache_.healthy_count < 64; i++) {
             if (shared_health_->backends[i].is_healthy.load(std::memory_order_acquire)) {
-                backend_cache_.healthy_indices[backend_cache_.healthy_count++] = i;
+                size_t cache_slot = backend_cache_.healthy_count;
+                backend_cache_.healthy_indices[cache_slot] = i;
+                // Lookup weight by matching IP+port with config backends (minimal overhead, done on refresh)
+                uint32_t weight = 1;
+                const auto& hb = shared_health_->backends[i];
+                for (const auto& pool : config_.pools) {
+                    for (const auto& b : pool.backends) {
+                        if (b.port == hb.port && !b.ip.empty() && std::strcmp(b.ip.c_str(), hb.ip) == 0) {
+                            weight = (b.weight > 0) ? static_cast<uint32_t>(b.weight) : 1u;
+                            goto weight_found;
+                        }
+                    }
+                }
+weight_found:
+                backend_cache_.healthy_weights[cache_slot] = weight;
+                backend_cache_.total_weight += weight;
+                backend_cache_.healthy_count++;
             }
         }
         
@@ -739,6 +758,8 @@ size_t Worker::select_backend_direct(uint32_t client_ip) {
         if (backend_cache_.healthy_count == 0 && current_backend_count > 0) {
             backend_cache_.healthy_count = 1;
             backend_cache_.healthy_indices[0] = 0;
+            backend_cache_.healthy_weights[0] = 1;
+            backend_cache_.total_weight = 1;
         }
         
         backend_cache_.last_update_ns = now_ns;
@@ -768,14 +789,19 @@ size_t Worker::select_backend_direct(uint32_t client_ip) {
         use_latency_based = (backends_with_data * 2 >= n);
     }
     
-    // Choose algorithm from config (pool 0) or auto-select
-    const std::string* algo_ptr = nullptr;
-    if (!config_.pools.empty()) algo_ptr = &config_.pools[0].lb_algorithm;
-    std::string algo = algo_ptr ? *algo_ptr : std::string("auto");
+    // Choose algorithm from config (pool 0) or auto
+    std::string algo = "auto";
+    if (!config_.pools.empty() && !config_.pools[0].lb_algorithm.empty()) {
+        algo = config_.pools[0].lb_algorithm;
+        // normalize simple typos/variants
+        if (algo == "power_of_two") algo = "p2c";
+        if (algo == "weighted-rr" || algo == "wrr") algo = "weighted_round_robin";
+        if (algo == "latency_based") algo = "latency";
+    }
     
-    // Auto-select algorithm if configured or if latency data is available
-    if (algo == "auto" || (algo == "round_robin" && use_latency_based)) {
-        algo = use_latency_based ? "latency" : "round_robin";
+    // Auto-select algorithm based on available data
+    if (algo == "auto") {
+        algo = use_latency_based ? "latency" : "p2c";
     }
     
     if (algo == "latency" || algo == "latency_based") {
@@ -831,11 +857,38 @@ size_t Worker::select_backend_direct(uint32_t client_ip) {
         int32_t slot = jump_consistent_hash((uint64_t)client_ip, (int32_t)n);
         if (slot < 0) slot = 0;
         return backend_cache_.healthy_indices[(size_t)slot];
+    } else if (algo == "weighted_round_robin") {
+        // Simple WRR across healthy backends using configured weights
+        uint32_t total_w = backend_cache_.total_weight > 0 ? backend_cache_.total_weight : static_cast<uint32_t>(n);
+        uint64_t pos = (backend_cache_.wrr_counter++) % total_w;
+        for (size_t i = 0; i < n; i++) {
+            uint32_t w = backend_cache_.healthy_weights[i];
+            if (pos < w) {
+                return backend_cache_.healthy_indices[i];
+            }
+            pos -= w;
+        }
+        // Fallback (shouldn't happen): pick first
+        return backend_cache_.healthy_indices[0];
     } else {
-        // round_robin default
-        size_t selected = backend_cache_.healthy_indices[pool_rr_counter_ % n];
-        pool_rr_counter_++;
-        return selected;
+        // Default: power-of-two choices (non-RR fallback)
+        uint64_t seed = (pool_rr_counter_ += 0x9E3779B97F4A7C15ULL);
+        size_t a = (size_t)((seed ^ (seed >> 18)) % n);
+        size_t b = (size_t)(((seed * 1103515245ULL + 12345ULL) ^ (seed >> 7)) % n);
+        if (b == a) b = (a + 1) % n;
+        size_t ia = backend_cache_.healthy_indices[a];
+        size_t ib = backend_cache_.healthy_indices[b];
+        const auto& ba = shared_health_->backends[ia];
+        const auto& bb = shared_health_->backends[ib];
+        if (use_latency_based || config_.use_latency_p2c) {
+            uint64_t la = ba.ewma_latency_us.load(std::memory_order_relaxed);
+            uint64_t lb = bb.ewma_latency_us.load(std::memory_order_relaxed);
+            return (la <= lb) ? ia : ib;
+        } else {
+            uint64_t pa = ba.requests_sent.load(std::memory_order_relaxed) - ba.responses_received.load(std::memory_order_relaxed);
+            uint64_t pb = bb.requests_sent.load(std::memory_order_relaxed) - bb.responses_received.load(std::memory_order_relaxed);
+            return (pa <= pb) ? ia : ib;
+        }
     }
 }
 

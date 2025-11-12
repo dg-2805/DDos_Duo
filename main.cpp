@@ -233,11 +233,17 @@ int main(int argc, char* argv[]) {
     // Parse command line arguments
     std::string config_file = "config.txt";
     std::string simulate_latency = "";
+    std::string cli_latencies = "";
+    std::string cli_weights = "";
     
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
         if (arg == "--simulate-latency" && i + 1 < argc) {
             simulate_latency = argv[++i];
+        } else if ((arg == "--latency" || arg == "--latencies") && i + 1 < argc) {
+            cli_latencies = argv[++i];
+        } else if (arg == "--weights" && i + 1 < argc) {
+            cli_weights = argv[++i];
         } else if (arg.find("--") != 0 && config_file == "config.txt") {
             // First non-option argument is config file
             config_file = arg;
@@ -258,9 +264,42 @@ int main(int argc, char* argv[]) {
     }
     
     // Apply latency simulation if provided
-    if (!simulate_latency.empty()) {
-        config.simulate_latency_us = simulate_latency;
+    if (!cli_latencies.empty()) {
+        config.simulate_latency_us = cli_latencies;
+        std::cout << "Latency simulation (CLI) enabled: " << cli_latencies << " microseconds" << std::endl;
+    } else if (!simulate_latency.empty()) {
+        config.simulate_latency_us = simulate_latency; // backward-compat flag
         std::cout << "Latency simulation enabled: " << simulate_latency << " microseconds" << std::endl;
+    }
+    
+    // Apply backend weights from CLI if provided (assign sequentially across all backends)
+    if (!cli_weights.empty()) {
+        std::istringstream iss(cli_weights);
+        std::string token;
+        std::vector<int> weights;
+        while (std::getline(iss, token, ',')) {
+            try {
+                int w = std::stoi(token);
+                if (w <= 0) w = 1;
+                weights.push_back(w);
+            } catch (...) {
+                // ignore invalid
+            }
+        }
+        if (!weights.empty()) {
+            size_t idx = 0;
+            for (auto& pool : config.pools) {
+                for (auto& be : pool.backends) {
+                    if (idx < weights.size()) {
+                        be.weight = weights[idx++];
+                    } else {
+                        break;
+                    }
+                }
+                if (idx >= weights.size()) break;
+            }
+            std::cout << "Applied CLI backend weights for " << std::min(weights.size(), (size_t)3) << " backends" << std::endl;
+        }
     }
     
     print_config(config);
