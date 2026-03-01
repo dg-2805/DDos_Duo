@@ -14,7 +14,7 @@ fi
 
 # Configuration
 LB_HOST="127.0.0.1"
-LB_PORT="5353"
+LB_PORT="53"
 QUERIES_FILE="queries.txt"
 DURATION=30
 QPS=10000
